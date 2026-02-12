@@ -3,9 +3,12 @@ import requests
 import base64
 import pandas as pd
 
-# --- CONFIGURACIÓN DE CRÉDENCIALES ---
+# --- CONFIGURACIÓN DE CREDENCIALES ---
 IMG_BB_API_KEY = "4d082bcad64d3390228ec3d92cdc15c3"
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScsT1z4dK51DHmbH797A8KEDZP7s4R6FX_xmVTBCew2vGIbQA/formResponse"
+
+# URL de la pestaña de Usuarios (formato exportación CSV)
+SHEET_USUARIOS_URL = "https://docs.google.com/spreadsheets/d/1FvnEi2HI4xjJg7IwYmhxPQESV8OaQrOZEfxmCXwSUx4/export?format=csv&gid=284650027"
 
 # IDs de Google Form
 ENTRY_DPTO = "entry.496848869"
@@ -16,6 +19,15 @@ ENTRY_LINK = "entry.791154903"
 ENTRY_NOTAS = "entry.2019103542"
 
 # --- FUNCIONES CORE ---
+def obtener_usuarios():
+    try:
+        df = pd.read_csv(SHEET_USUARIOS_URL)
+        # Convertimos a diccionario {Dpto: Password}
+        return dict(zip(df['Dpto'].astype(str), df['Password'].astype(str)))
+    except Exception as e:
+        st.error(f"Error al cargar base de datos de usuarios: {e}")
+        return {}
+
 def subir_a_imgbb(file):
     url = "https://api.imgbb.com/1/upload"
     img_data = base64.b64encode(file.read()).decode('utf-8')
@@ -36,19 +48,22 @@ if 'autenticado' not in st.session_state:
 # --- LOGIN ---
 if not st.session_state.autenticado:
     st.header("🏢 Acceso al Edificio")
-    dptos_lista = ["101", "102", "201", "202", "301", "302", "401", "402", "501", "502", "601", "602", "701", "702", "801", "ADMIN"]
-    user = st.selectbox("Seleccione su unidad", dptos_lista)
-    pwd = st.text_input("Contraseña", type="password")
+    usuarios_db = obtener_usuarios()
     
-    if st.button("Ingresar"):
-        # Lógica simple: si es admin usa una clave fija, si es dpto usa otra.
-        # En el futuro, aquí leerás tu pestaña 'Usuarios' de Google Sheets.
-        if (user == "ADMIN" and pwd == "admin123") or (pwd == f"clave{user}"):
-            st.session_state.autenticado = True
-            st.session_state.user = user
-            st.rerun()
-        else:
-            st.error("Contraseña incorrecta")
+    if usuarios_db:
+        dptos_lista = list(usuarios_db.keys())
+        user = st.selectbox("Seleccione su unidad", dptos_lista)
+        pwd = st.text_input("Contraseña", type="password")
+        
+        if st.button("Ingresar"):
+            if pwd == usuarios_db.get(user):
+                st.session_state.autenticado = True
+                st.session_state.user = user
+                st.rerun()
+            else:
+                st.error("❌ Contraseña incorrecta")
+    else:
+        st.warning("Cargando lista de usuarios...")
 
 # --- DASHBOARD PRINCIPAL ---
 else:
@@ -62,11 +77,10 @@ else:
 
     if choice == "Dashboard":
         st.title("📊 Estado Financiero")
-        st.info("Aquí se mostrarán los datos de tu Google Sheet en la Fase 2.")
-        # Aquí puedes usar pd.read_csv para mostrar la tabla de pagos realizados.
-
+        st.info("Visualización de ingresos y egresos (Próximamente Fase 2)")
+        
     elif choice == "Registrar Pago/Gasto":
-        tipo = "PAGO_VECINO" if st.session_state.user != "ADMIN" else "GASTO_ADMIN"
+        tipo = "PAGO_VECINO" if st.session_state.user not in ["ADMIN", "ADMINISTRADOR"] else "GASTO_ADMIN"
         st.subheader(f"Cargar {tipo.replace('_', ' ')}")
         
         with st.form("registro_form", clear_on_submit=True):
@@ -94,7 +108,7 @@ else:
                         if enviar_a_google_form(payload):
                             st.success("✅ Registro enviado correctamente.")
                         else:
-                            st.error("❌ Error al conectar con la base de datos.")
+                            st.error("❌ Error al conectar con el formulario.")
                     else:
                         st.error("❌ Error al subir la imagen a ImgBB.")
                 else:
