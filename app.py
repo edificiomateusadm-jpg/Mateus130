@@ -7,7 +7,7 @@ import pandas as pd
 IMG_BB_API_KEY = "4d082bcad64d3390228ec3d92cdc15c3"
 FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScsT1z4dK51DHmbH797A8KEDZP7s4R6FX_xmVTBCew2vGIbQA/formResponse"
 SHEET_USUARIOS_URL = "https://docs.google.com/spreadsheets/d/1FvnEi2HI4xjJg7IwYmhxPQESV8OaQrOZEfxmCXwSUx4/export?format=csv&gid=284650027"
-SHEET_DATA_URL = "https://docs.google.com/spreadsheets/d/1FvnEi2HI4xjJg7IwYmhxPQESV8OaQrOZEfxmCXwSUx4/export?format=csv&gid=0"
+SHEET_DATA_URL = "https://docs.google.com/spreadsheets/d/1FvnEi2HI4xjJg7IwYmhxPQESV8OaQrOZEfxmCXwSUx4/export?format=csv&gid=752843387"
 
 # IDs de Google Form
 ENTRY_DPTO, ENTRY_MONTO, ENTRY_TIPO, ENTRY_MES, ENTRY_LINK, ENTRY_NOTAS = (
@@ -140,3 +140,4 @@ else:
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.auth = False
         st.rerun()
+
