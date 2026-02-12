@@ -67,21 +67,25 @@ st.set_page_config(page_title="Sistema Edificio Pro", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 
-# --- LOGIN ---
+# --- LOGIN DEBUG ---
 if not st.session_state.auth:
     st.title("🏢 Gestión de Finanzas - Edificio")
     try:
         db_users = pd.read_csv(SHEET_USUARIOS_URL)
+        st.write("Conexión exitosa. Columnas detectadas:", list(db_users.columns)) # Debug
         user_list = db_users['Dpto'].unique()
         user = st.selectbox("Unidad / Rol", user_list)
         pwd = st.text_input("Contraseña", type="password")
         if st.button("Ingresar"):
-            real_pass = str(db_users[db_users['Dpto'].astype(str) == str(user)]['Password'].values[0])
+            row = db_users[db_users['Dpto'].astype(str) == str(user)]
+            real_pass = str(row['Password'].values[0])
             if str(pwd) == real_pass:
                 st.session_state.auth, st.session_state.user = True, user
                 st.rerun()
             else: st.error("Contraseña incorrecta")
-    except: st.warning("Configurando conexión...")
+    except Exception as e:
+        st.error(f"Error técnico: {e}") # Aquí te dirá si falta una columna o no hay acceso
+        st.info("Revisa que el Sheet sea público y las columnas se llamen 'Dpto' y 'Password'")
 
 # --- APP PRINCIPAL ---
 else:
@@ -176,3 +180,4 @@ else:
     if st.sidebar.button("Cerrar Sesión"):
         st.session_state.auth = False
         st.rerun()
+
