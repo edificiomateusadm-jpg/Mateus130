@@ -78,7 +78,7 @@ else:
     choice = st.sidebar.selectbox("Menú", menu)
     st.sidebar.button("Cerrar Sesión", on_click=lambda: st.session_state.update({"auth": False}))
 
-    # 1. DASHBOARD SIMPLIFICADO
+   # 1. DASHBOARD SIMPLIFICADO
     if choice == "Dashboard":
         st.title(f"📊 Resumen de Caja - {st.session_state.user}")
         
@@ -97,35 +97,41 @@ else:
 
         st.divider()
 
-        # Gráfico de Balance de Caja
         st.subheader("📈 Evolución del Saldo")
         
-        # Preparar data para el gráfico de una sola línea
         data_grafico = []
         
-        # Añadir Ingresos (como positivos)
-        for _, row in df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].iterrows():
-            data_grafico.append({'Fecha': pd.to_datetime(row['created_at']), 'Valor': float(row['monto'])})
+        # Procesar Ingresos: Forzar remoción de zona horaria
+        if not df_mov.empty:
+            ing_aprobados = df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].copy()
+            for _, row in ing_aprobados.iterrows():
+                fecha = pd.to_datetime(row['created_at']).tz_localize(None)
+                data_grafico.append({'Fecha': fecha, 'Valor': float(row['monto'])})
         
-        # Añadir Gastos (como negativos)
-        for _, row in df_gas.iterrows():
-            data_grafico.append({'Fecha': pd.to_datetime(row['fecha_gasto']), 'Valor': float(row['monto']) * -1})
+        # Procesar Gastos: Forzar remoción de zona horaria
+        if not df_gas.empty:
+            for _, row in df_gas.iterrows():
+                fecha = pd.to_datetime(row['fecha_gasto']).tz_localize(None)
+                data_grafico.append({'Fecha': fecha, 'Valor': float(row['monto']) * -1})
             
         if data_grafico:
             df_plot = pd.DataFrame(data_grafico).sort_values('Fecha')
             df_plot['Saldo Acumulado'] = df_plot['Valor'].cumsum()
             
-            fig = px.line(df_plot, x='Fecha', y='Saldo Acumulado', 
-                          title="Dinero disponible en el tiempo",
-                          markers=True, line_shape='hv') # hv hace que la línea cambie en pasos
+            # Gráfico de área para dar más peso visual al dinero en caja
+            fig = px.area(df_plot, x='Fecha', y='Saldo Acumulado', 
+                          title="Balance de Caja Neto (S/)",
+                          markers=True, line_shape='hv')
             
-            fig.update_traces(line_color='#2E86C1', line_width=3)
+            fig.update_traces(line_color='#2E86C1', fillcolor='rgba(46, 134, 193, 0.2)')
+            fig.update_layout(hovermode="x unified", xaxis_title="Línea de Tiempo", yaxis_title="Soles (S/)")
             st.plotly_chart(fig, use_container_width=True)
             
             
         else:
-            st.info("Aún no hay movimientos registrados.")
+            st.info("Aún no hay movimientos registrados para mostrar la tendencia.")
 
+    
     # --- RESTO DE SECCIONES (IGUAL QUE ANTES) ---
     elif is_admin and choice == "Validar Pagos":
         st.header("🔍 Validación")
@@ -212,3 +218,4 @@ else:
                     if st.button("Ver Comprobante", key=f"btn_g_{row['id']}"):
                         st.image(row['link_factura'], use_container_width=True)
         else: st.info("No hay gastos.")
+
