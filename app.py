@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import time
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -84,64 +85,74 @@ else:
     choice = st.sidebar.selectbox("Menú", menu)
     st.sidebar.button("Cerrar Sesión", on_click=lambda: st.session_state.update({"auth": False}))
 
-    # 1. DASHBOARD GRÁFICO
+    # 1. DASHBOARD GRÁFICO MEJORADO
     if choice == "Dashboard":
-        st.title(f"📊 Dashboard Financiero - {st.session_state.user}")
+        st.title(f"📊 Estado Financiero - {st.session_state.user}")
         
         df_mov = get_movimientos()
         df_gas = get_gastos()
         
-        # Procesar Ingresos Aprobados
+        # PROCESAMIENTO DE DATOS PARA EL GRÁFICO
         ing_df = df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].copy()
         ing_df = ing_df.rename(columns={'created_at': 'Fecha', 'monto': 'Monto'})
-        ing_df['Clase'] = 'Ingreso'
+        ing_df['Tipo'] = 'Ingreso'
         
-        # Procesar Gastos
         gas_df = df_gas.copy()
         gas_df = gas_df.rename(columns={'fecha_gasto': 'Fecha', 'monto': 'Monto'})
-        gas_df['Clase'] = 'Gasto'
+        gas_df['Tipo'] = 'Gasto'
+        gas_df['Monto_Neg'] = gas_df['Monto'] * -1 # Para el cálculo de caja
         
-        # Unificar y forzar formato fecha
-        df_final = pd.concat([ing_df[['Fecha', 'Monto', 'Clase']], gas_df[['Fecha', 'Monto', 'Clase', 'categoria'] if 'categoria' in gas_df.columns else ['Fecha', 'Monto', 'Clase']]])
-        df_final['Fecha'] = pd.to_datetime(df_final['Fecha'], errors='coerce')
-        df_final = df_final.dropna(subset=['Fecha']) # Limpiar filas sin fecha
+        # Consolidado temporal
+        df_union = pd.concat([ing_df[['Fecha', 'Monto', 'Tipo']], gas_df[['Fecha', 'Monto', 'Tipo']]])
+        df_union['Fecha'] = pd.to_datetime(df_union['Fecha']).dt.date
+        
+        # Agrupar por día
+        daily = df_union.groupby(['Fecha', 'Tipo'])['Monto'].sum().unstack(fill_value=0).reset_index()
+        if 'Ingreso' not in daily: daily['Ingreso'] = 0
+        if 'Gasto' not in daily: daily['Gasto'] = 0
+        
+        # Calcular Caja (Saldo Acumulado)
+        daily = daily.sort_values('Fecha')
+        daily['Caja Disponible'] = (daily['Ingreso'] - daily['Gasto']).cumsum()
 
         # Métricas
-        total_in = float(ing_df['Monto'].sum()) if not ing_df.empty else 0.0
-        total_out = float(gas_df['Monto'].sum()) if not gas_df.empty else 0.0
+        total_in = float(ing_df['Monto'].sum())
+        total_out = float(gas_df['Monto'].sum())
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Ingresos Aprobados", f"S/ {total_in:,.2f}")
+        c1.metric("Ingresos (Aprobados)", f"S/ {total_in:,.2f}")
         c2.metric("Gastos Totales", f"S/ {total_out:,.2f}")
-        c3.metric("Caja Disponible", f"S/ {total_in - total_out:,.2f}")
+        c3.metric("Saldo en Caja", f"S/ {total_in - total_out:,.2f}")
 
         st.divider()
 
-        if not df_final.empty:
-            col_graph1, col_graph2 = st.columns([2, 1])
+        if not daily.empty:
+            st.subheader("📈 Evolución de Ingresos, Gastos y Saldo")
             
-            with col_graph1:
-                st.subheader("Evolución de Fondos")
-                # Agrupamos por fecha (día) y clase
-                df_plot = df_final.groupby([df_final['Fecha'].dt.date, 'Clase'])['Monto'].sum().reset_index()
-                fig_line = px.line(df_plot, x='Fecha', y='Monto', color='Clase', 
-                                  markers=True, color_discrete_map={'Ingreso': '#00CC96', 'Gasto': '#EF553B'})
-                st.plotly_chart(fig_line, use_container_width=True)
+            fig = go.Figure()
+            # Línea de Ingresos (Barras para ver entrada diaria)
+            fig.add_trace(go.Bar(x=daily['Fecha'], y=daily['Ingreso'], name='Ingresos Diarios', marker_color='#00CC96', opacity=0.6))
+            # Línea de Gastos (Barras para ver salida diaria)
+            fig.add_trace(go.Bar(x=daily['Fecha'], y=daily['Gasto'], name='Gastos Diarios', marker_color='#EF553B', opacity=0.6))
+            # Línea de Caja (La curva del dinero disponible)
+            fig.add_trace(go.Scatter(x=daily['Fecha'], y=daily['Caja Disponible'], name='Caja Disponible (Saldo)', 
+                                     line=dict(color='#636EFA', width=4), mode='lines+markers'))
 
-            with col_graph2:
-                st.subheader("Gastos por Categoría")
-                if not gas_df.empty:
-                    fig_pie = px.pie(gas_df, values='Monto', names='categoria', hole=0.4,
-                                    color_discrete_sequence=px.colors.qualitative.Pastel)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info("No hay gastos registrados.")
+            fig.update_layout(hovermode="x unified", barmode='group', height=450,
+                              xaxis_title="Fecha", yaxis_title="Monto S/")
+            st.plotly_chart(fig, use_container_width=True)
             
             
+
+            # Gráfico de torta (solo si hay gastos)
+            if not gas_df.empty:
+                st.subheader("📦 Distribución de Gastos")
+                fig_pie = px.pie(gas_df, values='Monto', names='categoria', hole=0.4)
+                st.plotly_chart(fig_pie)
         else:
-            st.info("Aún no hay datos para generar gráficos.")
+            st.info("No hay datos para mostrar gráficos aún.")
 
-    # (El resto de las secciones permanecen igual pero con los nombres de tabla correctos)
+    # (El resto del código se mantiene igual para Validar Pagos, Cargar Deudas, Registrar Gastos, etc.)
     elif is_admin and choice == "Validar Pagos":
         st.header("🔍 Validación")
         df_all = get_movimientos()
@@ -207,7 +218,7 @@ else:
             elif est == "PENDIENTE": st.warning("⏳ En revisión")
             elif mon > 0:
                 st.info(f"Deuda: S/ {mon}")
-                f_p = st.file_uploader("Voucher", type=['jpg','png','jpeg'])
+                f_p = st.file_uploader("Subir Voucher", type=['jpg','png','jpeg'])
                 if st.button("Enviar Pago") and f_p:
                     r_i = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": f_p}).json()
                     registrar_db("movimientos", {"dpto": st.session_state.user, "monto": mon, "tipo": "PAGO_VECINO", "mes_anio": m_sel, "link_comprobante": r_i['data']['url']})
