@@ -6,8 +6,8 @@ from supabase import create_client, Client
 
 # --- CONFIGURACIÓN ---
 # Reemplaza con tus datos de Supabase
-SUPABASE_URL = "TU_URL_DE_SUPABASE"
-SUPABASE_KEY = "TU_ANON_KEY_DE_SUPABASE"
+SUPABASE_URL = "https://supabase.com/dashboard/project/lcktyhjugquwbtwlhhav"
+SUPABASE_KEY = "sb_publishable_w3ICwBwmfgWNrkH0dJo2-w_arDBgA20"
 IMG_BB_API_KEY = "4d082bcad64d3390228ec3d92cdc15c3"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -134,3 +134,4 @@ else:
                 registrar_db({"dpto": st.session_state.user, "monto": mon, "tipo": "PAGO_VECINO", "mes_anio": mes_anio_v, "link_comprobante": res_img['data']['url']})
                 st.rerun()
         else: st.warning("No hay deuda cargada para este mes.")
+
