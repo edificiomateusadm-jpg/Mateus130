@@ -24,8 +24,14 @@ def get_movimientos(mes_anio=None):
         query = supabase.table("movimientos").select("*")
         if mes_anio: query = query.eq("mes_anio", mes_anio)
         res = query.order("created_at").execute()
+        
+        # BLINDAJE: Si no hay datos, devolvemos un DataFrame con las columnas ya definidas
+        if not res.data:
+            return pd.DataFrame(columns=['id', 'created_at', 'dpto', 'monto', 'tipo', 'mes_anio', 'link_comprobante', 'notas'])
+        
         return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+    except: 
+        return pd.DataFrame(columns=['id', 'created_at', 'dpto', 'monto', 'tipo', 'mes_anio', 'link_comprobante', 'notas'])
 
 def registrar_db(data):
     try:
@@ -79,7 +85,7 @@ else:
     elif is_admin and choice == "Validar Pagos":
         st.header("🔍 Validación")
         df_all = get_movimientos()
-        if not df_all.empty:
+        if not df_all.empty and 'mes_anio' in df_all.columns:
             for m_a in df_all['mes_anio'].unique():
                 df_m = df_all[df_all['mes_anio'] == m_a]
                 for d in df_m['dpto'].unique():
@@ -92,6 +98,8 @@ else:
                                 if registrar_db({"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "APROBADO"}): st.rerun()
                             if st.button("Rechazar", key=f"r_{d}_{m_a}"):
                                 if registrar_db({"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "RECHAZADO"}): st.rerun()
+        else:
+            st.info("No hay pagos pendientes de revisión.")
 
     elif is_admin and choice == "Cargar Deudas":
         st.header("📈 Revisión y Carga de Deudas")
@@ -100,15 +108,13 @@ else:
         anio = c2.selectbox("Año", [2025, 2026, 2027], index=1)
         mes_anio_sel = f"{mes} {anio}"
         
-        # --- LÓGICA DE CARGA AUTOMÁTICA ---
-        # Consultamos qué hay en la DB para ese mes específico
+        # Consultamos el mes (Ahora siempre traerá columnas aunque esté vacío)
         df_actual = get_movimientos(mes_anio=mes_anio_sel)
         dptos_lista = ["101","102","201","202","301","302","401","402","501","502","601","602","701","702","801"]
         
-        # Creamos la lista de montos actuales (si no hay, ponemos 0.0)
         montos_iniciales = []
         for d in dptos_lista:
-            # Buscamos el último COBRO_MENSUAL para este dpto en este mes
+            # Ahora esto no fallará porque 'dpto' y 'tipo' siempre existen
             cobro = df_actual[(df_actual['dpto'] == d) & (df_actual['tipo'] == 'COBRO_MENSUAL')]
             montos_iniciales.append(float(cobro.iloc[-1]['monto']) if not cobro.empty else 0.0)
         
@@ -118,8 +124,9 @@ else:
         if st.button("🚀 Actualizar / Publicar Deudas"):
             with st.spinner("Guardando..."):
                 for _, row in df_editor.iterrows():
-                    # Solo registramos si el monto es distinto al inicial o mayor a 0 para no duplicar data innecesaria
-                    registrar_db({"dpto": row['Dpto'], "monto": row['Monto'], "tipo": "COBRO_MENSUAL", "mes_anio": mes_anio_sel, "notas": "Actualización Admin"})
+                    # Solo guardamos si el monto es mayor a 0
+                    if row['Monto'] > 0:
+                        registrar_db({"dpto": row['Dpto'], "monto": row['Monto'], "tipo": "COBRO_MENSUAL", "mes_anio": mes_anio_sel, "notas": "Carga"})
                 st.success(f"Datos de {mes_anio_sel} actualizados.")
                 time.sleep(1)
                 st.rerun()
@@ -127,7 +134,7 @@ else:
     elif not is_admin and choice == "Registrar Pago":
         st.header("📝 Mi Estado")
         df_t = get_movimientos()
-        if not df_t.empty:
+        if not df_t.empty and 'mes_anio' in df_t.columns:
             m_disp = sorted(df_t['mes_anio'].unique())
             m_sel = st.selectbox("Periodo", m_disp)
             est, mon, lnk = get_status_logic(df_t[df_t['mes_anio'] == m_sel], st.session_state.user)
