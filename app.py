@@ -77,44 +77,49 @@ else:
     choice = st.sidebar.selectbox("Menú", menu)
     st.sidebar.button("Cerrar Sesión", on_click=lambda: st.session_state.update({"auth": False}))
 
-    # 1. DASHBOARD CON RESUMEN FINANCIERO
+    # 1. DASHBOARD
     if choice == "Dashboard":
-        st.title(f"👋 Panel de {st.session_state.user}")
-        
-        # Mini Balance
+        st.title(f"👋 Hola, {st.session_state.user}")
         df_p = get_movimientos()
         df_g = get_gastos()
-        
         ingresos = df_p[df_p['tipo'] == 'VALIDACION_ADMIN']['monto'].sum() if not df_p.empty else 0
         egresos = df_g['monto'].sum() if not df_g.empty else 0
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Ingresos (Aprobados)", f"S/ {ingresos:,.2f}")
-        c2.metric("Gastos Totales", f"S/ {egresos:,.2f}")
-        c3.metric("Balance Caja", f"S/ {ingresos - egresos:,.2f}", delta=float(ingresos-egresos))
+        c1.metric("Ingresos Totales", f"S/ {ingresos:,.2f}")
+        c2.metric("Egresos Totales", f"S/ {egresos:,.2f}")
+        c3.metric("Caja Actual", f"S/ {ingresos - egresos:,.2f}")
+        
+        st.divider()
+        st.info("Utiliza el menú lateral para gestionar pagos o revisar cuentas.")
 
     # 2. VALIDAR PAGOS (ADMIN)
     elif is_admin and choice == "Validar Pagos":
-        st.header("🔍 Validación")
+        st.header("🔍 Validación de Comprobantes")
         df_all = get_movimientos()
-        if not df_all.empty and 'mes_anio' in df_all.columns:
+        if not df_all.empty:
+            pendientes = False
             for m_a in df_all['mes_anio'].unique():
                 df_m = df_all[df_all['mes_anio'] == m_a]
                 for d in df_m['dpto'].unique():
                     est, mon, lnk = get_status_logic(df_m, d)
                     if est == "PENDIENTE":
-                        with st.expander(f"🔔 Dpto {d} - {m_a}"):
-                            st.warning(f"💰 Deuda en sistema: ${mon}")
+                        pendientes = True
+                        with st.expander(f"Dpto {d} - {m_a}"):
+                            st.write(f"Monto esperado: **S/ {mon}**")
                             st.image(lnk, use_container_width=True)
-                            if st.button("Aprobar", key=f"a_{d}_{m_a}"):
-                                if registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "APROBADO"}): st.rerun()
-                            if st.button("Rechazar", key=f"r_{d}_{m_a}"):
-                                if registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "RECHAZADO"}): st.rerun()
-        else: st.info("Sin pagos pendientes.")
+                            col1, col2 = st.columns(2)
+                            if col1.button("✅ Aprobar", key=f"ap_{d}_{m_a}"):
+                                registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "APROBADO"})
+                                st.rerun()
+                            if col2.button("❌ Rechazar", key=f"re_{d}_{m_a}"):
+                                registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "RECHAZADO"})
+                                st.rerun()
+            if not pendientes: st.success("Todo al día.")
 
     # 3. CARGAR DEUDAS (ADMIN)
     elif is_admin and choice == "Cargar Deudas":
-        st.header("📈 Cargar Deudas Mensuales")
+        st.header("📈 Cargar Cuotas")
         c1, c2 = st.columns(2)
         mes = c1.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"])
         anio = c2.selectbox("Año", [2025, 2026, 2027], index=1)
@@ -126,52 +131,58 @@ else:
             cobro = df_actual[(df_actual['dpto'] == d) & (df_actual['tipo'] == 'COBRO_MENSUAL')]
             montos_ini.append(float(cobro.iloc[-1]['monto']) if not cobro.empty else 0.0)
         df_ed = st.data_editor(pd.DataFrame({'Dpto': dptos_lista, 'Monto': montos_ini}), hide_index=True, key=f"ed_{mes_anio_sel}")
-        if st.button("Guardar Deudas"):
+        if st.button("Guardar"):
             for _, r in df_ed.iterrows():
                 if r['Monto'] > 0: registrar_db("movimientos", {"dpto": r['Dpto'], "monto": r['Monto'], "tipo": "COBRO_MENSUAL", "mes_anio": mes_anio_sel, "notas": "Carga"})
-            st.success("Guardado"); time.sleep(1); st.rerun()
+            st.rerun()
 
-    # 4. REGISTRAR GASTOS (ADMIN) - NUEVA SECCIÓN
+    # 4. REGISTRAR GASTOS (ADMIN)
     elif is_admin and choice == "Registrar Gastos":
-        st.header("💸 Registro de Gastos del Edificio")
-        with st.form("form_gastos", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            fecha = col1.date_input("Fecha del Gasto", datetime.now())
-            cat = col2.selectbox("Categoría", ["Luz Common", "Agua", "Seguridad", "Mantenimiento Ascensor", "Limpieza", "Reparaciones", "Otros"])
-            desc = st.text_input("Descripción del gasto")
-            monto_g = st.number_input("Monto (S/)", min_value=0.1, step=0.1)
-            foto_g = st.file_uploader("Subir Factura/Recibo", type=['jpg', 'png', 'jpeg'])
-            
-            if st.form_submit_button("Registrar Gasto"):
-                if foto_g and desc:
-                    with st.spinner("Subiendo..."):
-                        img_res = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": foto_g}).json()
-                        link = img_res['data']['url']
-                        if registrar_db("gastos", {"fecha_gasto": str(fecha), "categoria": cat, "descripcion": desc, "monto": monto_g, "link_factura": link}):
-                            st.success("Gasto registrado correctamente")
-                            time.sleep(1); st.rerun()
-                else: st.warning("Falta descripción o comprobante.")
-        
-        st.subheader("Historial de Gastos")
-        df_gastos_list = get_gastos()
-        if not df_gastos_list.empty:
-            st.dataframe(df_gastos_list[['fecha_gasto', 'categoria', 'descripcion', 'monto']], use_container_width=True)
+        st.header("💸 Registrar Gasto")
+        with st.form("g"):
+            f = st.date_input("Fecha")
+            c = st.selectbox("Categoría", ["Luz", "Agua", "Mantenimiento", "Limpieza", "Otros"])
+            d = st.text_input("Descripción")
+            m = st.number_input("Monto S/", min_value=0.0)
+            img = st.file_uploader("Recibo", type=['jpg','png','jpeg'])
+            if st.form_submit_button("Guardar Gasto") and img and d:
+                r = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": img}).json()
+                registrar_db("gastos", {"fecha_gasto": str(f), "categoria": c, "descripcion": d, "monto": m, "link_factura": r['data']['url']})
+                st.success("Gasto guardado"); st.rerun()
 
     # 5. REGISTRAR PAGO (VECINO)
     elif not is_admin and choice == "Registrar Pago":
-        st.header("📝 Registrar mi Pago")
+        st.header("📝 Mis Pagos")
         df_t = get_movimientos()
         if not df_t.empty:
             m_disp = sorted(df_t['mes_anio'].unique())
-            m_sel = st.selectbox("Mes a pagar", m_disp)
+            m_sel = st.selectbox("Periodo", m_disp)
             est, mon, lnk = get_status_logic(df_t[df_t['mes_anio'] == m_sel], st.session_state.user)
-            if est == "APROBADO": st.success(f"✅ Pagado: ${mon}")
+            if est == "APROBADO": st.success(f"✅ Pagado S/ {mon}")
             elif est == "PENDIENTE": st.warning("⏳ En revisión")
             elif mon > 0:
-                st.info(f"Deuda: ${mon}")
-                f = st.file_uploader("Voucher", type=['jpg', 'png', 'jpeg'])
-                if st.button("Enviar") and f:
-                    r_img = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": f}).json()
-                    registrar_db("movimientos", {"dpto": st.session_state.user, "monto": mon, "tipo": "PAGO_VECINO", "mes_anio": m_sel, "link_comprobante": r_img['data']['url']})
+                st.info(f"Deuda: S/ {mon}")
+                f_p = st.file_uploader("Subir Voucher", type=['jpg','png','jpeg'])
+                if st.button("Enviar Pago") and f_p:
+                    r_i = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": f_p}).json()
+                    registrar_db("movimientos", {"dpto": st.session_state.user, "monto": mon, "tipo": "PAGO_VECINO", "mes_anio": m_sel, "link_comprobante": r_i['data']['url']})
                     st.rerun()
-        else: st.warning("No hay deudas.")
+        else: st.info("No hay deudas cargadas.")
+
+    # 6. VER GASTOS (VECINO) - NUEVA SECCIÓN
+    elif not is_admin and choice == "Ver Gastos":
+        st.header("📊 Gastos del Edificio")
+        st.write("Lista cronológica de gastos realizados por la administración.")
+        df_g = get_gastos()
+        if not df_g.empty:
+            # Mostramos una tabla amigable
+            for i, row in df_g.iterrows():
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    col1.write(f"📅 **{row['fecha_gasto']}**")
+                    col2.write(f"📌 **{row['categoria']}**: {row['descripcion']}")
+                    col3.write(f"💰 **S/ {row['monto']:,.2f}**")
+                    if st.button("Ver Comprobante", key=f"btn_g_{row['id']}"):
+                        st.image(row['link_factura'], caption=f"Recibo - {row['descripcion']}", use_container_width=True)
+        else:
+            st.info("No hay gastos registrados todavía.")
