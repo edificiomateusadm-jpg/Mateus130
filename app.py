@@ -3,7 +3,6 @@ import requests
 import pandas as pd
 import time
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -27,8 +26,6 @@ def get_movimientos(mes_anio=None):
         if mes_anio: query = query.eq("mes_anio", mes_anio)
         res = query.order("created_at").execute()
         df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=['id', 'created_at', 'dpto', 'monto', 'tipo', 'mes_anio', 'link_comprobante', 'notas'])
-        if not df.empty:
-            df['created_at'] = pd.to_datetime(df['created_at'], errors='coerce')
         return df
     except: return pd.DataFrame()
 
@@ -36,8 +33,6 @@ def get_gastos():
     try:
         res = supabase.table("gastos").select("*").order("fecha_gasto", desc=False).execute()
         df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=['id', 'created_at', 'fecha_gasto', 'categoria', 'descripcion', 'monto', 'link_factura'])
-        if not df.empty:
-            df['fecha_gasto'] = pd.to_datetime(df['fecha_gasto'], errors='coerce')
         return df
     except: return pd.DataFrame()
 
@@ -67,7 +62,7 @@ st.set_page_config(page_title="Gestión Edificio 2026", layout="wide")
 if 'auth' not in st.session_state: st.session_state.auth = False
 
 if not st.session_state.auth:
-    st.title("🏢 Acceso al Edificio")
+    st.title("🏢 Acceso")
     u = st.text_input("Unidad")
     p = st.text_input("Contraseña", type="password")
     if st.button("Entrar"):
@@ -83,75 +78,55 @@ else:
     choice = st.sidebar.selectbox("Menú", menu)
     st.sidebar.button("Cerrar Sesión", on_click=lambda: st.session_state.update({"auth": False}))
 
-    # 1. DASHBOARD GRÁFICO (REVISADO)
+    # 1. DASHBOARD SIMPLIFICADO
     if choice == "Dashboard":
-        st.title(f"📊 Estado Financiero - {st.session_state.user}")
+        st.title(f"📊 Resumen de Caja - {st.session_state.user}")
         
         df_mov = get_movimientos()
         df_gas = get_gastos()
         
-        # Procesar Ingresos
-        ing_df = df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].copy()
-        if not ing_df.empty:
-            ing_df['Fecha'] = ing_df['created_at'].dt.normalize() # Normaliza a fecha sin hora
-            ing_df = ing_df.rename(columns={'monto': 'Monto'})
-            ing_df['Tipo'] = 'Ingreso'
-        else:
-            ing_df = pd.DataFrame(columns=['Fecha', 'Monto', 'Tipo'])
-            
-        # Procesar Gastos
-        gas_df = df_gas.copy()
-        if not gas_df.empty:
-            gas_df['Fecha'] = gas_df['fecha_gasto'].dt.normalize()
-            gas_df = gas_df.rename(columns={'monto': 'Monto'})
-            gas_df['Tipo'] = 'Gasto'
-        else:
-            gas_df = pd.DataFrame(columns=['Fecha', 'Monto', 'Tipo', 'categoria'])
-
-        # Unificar
-        df_union = pd.concat([ing_df[['Fecha', 'Monto', 'Tipo']], gas_df[['Fecha', 'Monto', 'Tipo']]])
-        
-        # Métricas
-        total_in = float(ing_df['Monto'].sum()) if not ing_df.empty else 0.0
-        total_out = float(gas_df['Monto'].sum()) if not gas_df.empty else 0.0
+        # Calcular totales simples
+        ingresos_totales = float(df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN']['monto'].sum()) if not df_mov.empty else 0.0
+        gastos_totales = float(df_gas['monto'].sum()) if not df_gas.empty else 0.0
+        saldo_actual = ingresos_totales - gastos_totales
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Ingresos (Aprobados)", f"S/ {total_in:,.2f}")
-        c2.metric("Gastos Totales", f"S/ {total_out:,.2f}")
-        c3.metric("Saldo en Caja", f"S/ {total_in - total_out:,.2f}")
+        c1.metric("Ingresos Totales", f"S/ {ingresos_totales:,.2f}")
+        c2.metric("Gastos Totales", f"S/ {gastos_totales:,.2f}")
+        c3.metric("Saldo Disponible", f"S/ {saldo_actual:,.2f}")
 
         st.divider()
 
-        if not df_union.empty:
-            st.subheader("📈 Evolución de Ingresos, Gastos y Saldo")
+        # Gráfico de Balance de Caja
+        st.subheader("📈 Evolución del Saldo")
+        
+        # Preparar data para el gráfico de una sola línea
+        data_grafico = []
+        
+        # Añadir Ingresos (como positivos)
+        for _, row in df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].iterrows():
+            data_grafico.append({'Fecha': pd.to_datetime(row['created_at']), 'Valor': float(row['monto'])})
+        
+        # Añadir Gastos (como negativos)
+        for _, row in df_gas.iterrows():
+            data_grafico.append({'Fecha': pd.to_datetime(row['fecha_gasto']), 'Valor': float(row['monto']) * -1})
             
-            # Agrupar por día
-            daily = df_union.groupby(['Fecha', 'Tipo'])['Monto'].sum().unstack(fill_value=0).reset_index()
-            if 'Ingreso' not in daily: daily['Ingreso'] = 0
-            if 'Gasto' not in daily: daily['Gasto'] = 0
+        if data_grafico:
+            df_plot = pd.DataFrame(data_grafico).sort_values('Fecha')
+            df_plot['Saldo Acumulado'] = df_plot['Valor'].cumsum()
             
-            daily = daily.sort_values('Fecha')
-            daily['Caja Disponible'] = (daily['Ingreso'] - daily['Gasto']).cumsum()
-
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=daily['Fecha'], y=daily['Ingreso'], name='Ingresos', marker_color='#00CC96'))
-            fig.add_trace(go.Bar(x=daily['Fecha'], y=daily['Gasto'], name='Gastos', marker_color='#EF553B'))
-            fig.add_trace(go.Scatter(x=daily['Fecha'], y=daily['Caja Disponible'], name='Saldo Acumulado', 
-                                     line=dict(color='#636EFA', width=4)))
-
-            fig.update_layout(hovermode="x unified", barmode='group', height=450)
+            fig = px.line(df_plot, x='Fecha', y='Saldo Acumulado', 
+                          title="Dinero disponible en el tiempo",
+                          markers=True, line_shape='hv') # hv hace que la línea cambie en pasos
+            
+            fig.update_traces(line_color='#2E86C1', line_width=3)
             st.plotly_chart(fig, use_container_width=True)
             
             
-
-            if not gas_df.empty:
-                st.subheader("📦 Gastos por Categoría")
-                fig_pie = px.pie(gas_df, values='Monto', names='categoria', hole=0.4)
-                st.plotly_chart(fig_pie)
         else:
-            st.info("No hay suficientes datos para generar gráficos.")
+            st.info("Aún no hay movimientos registrados.")
 
-    # (Las demás secciones mantienen la lógica anterior...)
+    # --- RESTO DE SECCIONES (IGUAL QUE ANTES) ---
     elif is_admin and choice == "Validar Pagos":
         st.header("🔍 Validación")
         df_all = get_movimientos()
@@ -159,18 +134,18 @@ else:
         if not df_all.empty:
             for m_a in df_all['mes_anio'].unique():
                 df_m = df_all[df_all['mes_anio'] == m_a]
-                for d in df_m['dpto'].unique():
+                for d in df_m['dpto'].unique() if 'dpto' in df_m.columns else []:
                     est, mon, lnk = get_status_logic(df_m, d)
                     if est == "PENDIENTE":
                         pendientes = True
                         with st.expander(f"Dpto {d} - {m_a}"):
-                            st.warning(f"💰 Deuda: S/ {mon}")
+                            st.write(f"Monto: S/ {mon}")
                             st.image(lnk, use_container_width=True)
                             c1, c2 = st.columns(2)
-                            if c1.button("✅ Aprobar", key=f"a_{d}_{m_a}"):
+                            if c1.button("Aprobar", key=f"a_{d}_{m_a}"):
                                 registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "APROBADO"})
                                 st.rerun()
-                            if c2.button("❌ Rechazar", key=f"r_{d}_{m_a}"):
+                            if c2.button("Rechazar", key=f"r_{d}_{m_a}"):
                                 registrar_db("movimientos", {"dpto": d, "monto": mon, "tipo": "VALIDACION_ADMIN", "mes_anio": m_a, "notas": "RECHAZADO"})
                                 st.rerun()
         if not pendientes: st.success("Sin pendientes.")
@@ -185,13 +160,13 @@ else:
         d_list = ["101","102","201","202","301","302","401","402","501","502","601","602","701","702","801"]
         m_ini = []
         for d in d_list:
-            cobro = df_act[(df_act['dpto'] == d) & (df_act['tipo'] == 'COBRO_MENSUAL')]
+            cobro = df_act[(df_act['dpto'] == d) & (df_act['tipo'] == 'COBRO_MENSUAL')] if not df_act.empty else pd.DataFrame()
             m_ini.append(float(cobro.iloc[-1]['monto']) if not cobro.empty else 0.0)
         df_ed = st.data_editor(pd.DataFrame({'Dpto': d_list, 'Monto': m_ini}), hide_index=True, key=f"ed_{mes_a}")
         if st.button("Guardar"):
             for _, r in df_ed.iterrows():
                 if r['Monto'] > 0: registrar_db("movimientos", {"dpto": r['Dpto'], "monto": r['Monto'], "tipo": "COBRO_MENSUAL", "mes_anio": mes_a, "notas": "Carga"})
-            st.rerun()
+            st.success("Guardado"); st.rerun()
 
     elif is_admin and choice == "Registrar Gastos":
         st.header("💸 Registrar Gasto")
@@ -217,12 +192,12 @@ else:
             elif est == "PENDIENTE": st.warning("⏳ En revisión")
             elif mon > 0:
                 st.info(f"Deuda: S/ {mon}")
-                f_p = st.file_uploader("Subir Voucher", type=['jpg','png','jpeg'])
+                f_p = st.file_uploader("Voucher", type=['jpg','png','jpeg'])
                 if st.button("Enviar Pago") and f_p:
                     r_i = requests.post(f"https://api.imgbb.com/1/upload?key={IMG_BB_API_KEY}", files={"image": f_p}).json()
                     registrar_db("movimientos", {"dpto": st.session_state.user, "monto": mon, "tipo": "PAGO_VECINO", "mes_anio": m_sel, "link_comprobante": r_i['data']['url']})
                     st.rerun()
-        else: st.info("No hay deudas cargadas.")
+        else: st.info("No hay deudas.")
 
     elif not is_admin and choice == "Ver Gastos":
         st.header("📊 Gastos del Edificio")
@@ -231,11 +206,9 @@ else:
             for i, row in df_g.iterrows():
                 with st.container(border=True):
                     col1, col2, col3 = st.columns([1, 2, 1])
-                    # Verificación de que la fecha sea válida antes de formatear
-                    f_str = row['fecha_gasto'].strftime('%Y-%m-%d') if pd.notnull(row['fecha_gasto']) else "N/A"
-                    col1.write(f"📅 **{f_str}**")
+                    col1.write(f"📅 **{row['fecha_gasto']}**")
                     col2.write(f"📌 **{row['categoria']}**: {row['descripcion']}")
                     col3.write(f"💰 **S/ {row['monto']:,.2f}**")
                     if st.button("Ver Comprobante", key=f"btn_g_{row['id']}"):
                         st.image(row['link_factura'], use_container_width=True)
-        else: st.info("No hay gastos registrados.")
+        else: st.info("No hay gastos.")
