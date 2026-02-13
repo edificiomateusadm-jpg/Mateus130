@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+import plotly.express as px
 from datetime import datetime
 from supabase import create_client, Client
 
@@ -26,13 +27,18 @@ def get_movimientos(mes_anio=None):
         res = query.order("created_at").execute()
         if not res.data:
             return pd.DataFrame(columns=['id', 'created_at', 'dpto', 'monto', 'tipo', 'mes_anio', 'link_comprobante', 'notas'])
-        return pd.DataFrame(res.data)
-    except: return pd.DataFrame(columns=['id', 'created_at', 'dpto', 'monto', 'tipo', 'mes_anio', 'link_comprobante', 'notas'])
+        df = pd.DataFrame(res.data)
+        df['created_at'] = pd.to_datetime(df['created_at'])
+        return df
+    except: return pd.DataFrame()
 
 def get_gastos():
     try:
-        res = supabase.table("gastos").select("*").order("fecha_gasto", desc=True).execute()
-        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+        res = supabase.table("gastos").select("*").order("fecha_gasto", desc=False).execute()
+        if not res.data: return pd.DataFrame()
+        df = pd.DataFrame(res.data)
+        df['fecha_gasto'] = pd.to_datetime(df['fecha_gasto'])
+        return df
     except: return pd.DataFrame()
 
 def registrar_db(tabla, data):
@@ -61,7 +67,7 @@ st.set_page_config(page_title="Gestión Edificio 2026", layout="wide")
 if 'auth' not in st.session_state: st.session_state.auth = False
 
 if not st.session_state.auth:
-    st.title("🏢 Acceso")
+    st.title("🏢 Acceso al Edificio")
     u = st.text_input("Unidad")
     p = st.text_input("Contraseña", type="password")
     if st.button("Entrar"):
@@ -77,25 +83,58 @@ else:
     choice = st.sidebar.selectbox("Menú", menu)
     st.sidebar.button("Cerrar Sesión", on_click=lambda: st.session_state.update({"auth": False}))
 
-    # 1. DASHBOARD
+    # 1. DASHBOARD GRÁFICO
     if choice == "Dashboard":
-        st.title(f"👋 Hola, {st.session_state.user}")
-        df_p = get_movimientos()
-        df_g = get_gastos()
-        ingresos = df_p[df_p['tipo'] == 'VALIDACION_ADMIN']['monto'].sum() if not df_p.empty else 0
-        egresos = df_g['monto'].sum() if not df_g.empty else 0
+        st.title(f"📊 Dashboard Financiero - {st.session_state.user}")
+        
+        df_mov = get_movimientos()
+        df_gas = get_gastos()
+        
+        # Procesar Ingresos (Solo aprobados)
+        ingresos_df = df_mov[df_mov['tipo'] == 'VALIDACION_ADMIN'].copy()
+        ingresos_df = ingresos_df.rename(columns={'created_at': 'Fecha', 'monto': 'Monto'})
+        ingresos_df['Clase'] = 'Ingreso'
+        
+        # Procesar Gastos
+        gastos_df = df_gas.copy()
+        if not gastos_df.empty:
+            gastos_df = gastos_df.rename(columns={'fecha_gasto': 'Fecha', 'monto': 'Monto'})
+            gastos_df['Clase'] = 'Gasto'
+        
+        # Unificar para el gráfico
+        df_final = pd.concat([ingresos_df[['Fecha', 'Monto', 'Clase']], gastos_df[['Fecha', 'Monto', 'Clase']]])
+        
+        # Métricas principales
+        total_in = ingresos_df['Monto'].sum() if not ingresos_df.empty else 0
+        total_out = gastos_df['Monto'].sum() if not gastos_df.empty else 0
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Ingresos Totales", f"S/ {ingresos:,.2f}")
-        c2.metric("Egresos Totales", f"S/ {egresos:,.2f}")
-        c3.metric("Caja Actual", f"S/ {ingresos - egresos:,.2f}")
-        
+        c1.metric("Ingresos Aprobados", f"S/ {total_in:,.2f}")
+        c2.metric("Gastos Totales", f"S/ {total_out:,.2f}")
+        c3.metric("Caja Disponible", f"S/ {total_in - total_out:,.2f}")
+
         st.divider()
-        st.info("Utiliza el menú lateral para gestionar pagos o revisar cuentas.")
+
+        if not df_final.empty:
+            st.subheader("Evolución de Fondos")
+            # Agrupar por fecha para suavizar la línea si hay múltiples movimientos el mismo día
+            df_plot = df_final.groupby([df_final['Fecha'].dt.date, 'Clase'])['Monto'].sum().reset_index()
+            
+            fig = px.line(df_plot, x='Fecha', y='Monto', color='Clase', 
+                          markers=True, line_shape='linear',
+                          color_discrete_map={'Ingreso': '#00CC96', 'Gasto': '#EF553B'},
+                          title="Ingresos vs Gastos en el Tiempo")
+            
+            fig.update_layout(hovermode="x unified", xaxis_title="Tiempo", yaxis_title="Monto S/")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            
+        else:
+            st.info("Aún no hay datos suficientes para generar gráficos.")
 
     # 2. VALIDAR PAGOS (ADMIN)
     elif is_admin and choice == "Validar Pagos":
-        st.header("🔍 Validación de Comprobantes")
+        st.header("🔍 Validación")
         df_all = get_movimientos()
         if not df_all.empty:
             pendientes = False
@@ -169,20 +208,17 @@ else:
                     st.rerun()
         else: st.info("No hay deudas cargadas.")
 
-    # 6. VER GASTOS (VECINO) - NUEVA SECCIÓN
+    # 6. VER GASTOS (VECINO)
     elif not is_admin and choice == "Ver Gastos":
         st.header("📊 Gastos del Edificio")
-        st.write("Lista cronológica de gastos realizados por la administración.")
         df_g = get_gastos()
         if not df_g.empty:
-            # Mostramos una tabla amigable
             for i, row in df_g.iterrows():
                 with st.container(border=True):
                     col1, col2, col3 = st.columns([1, 2, 1])
-                    col1.write(f"📅 **{row['fecha_gasto']}**")
+                    col1.write(f"📅 **{row['fecha_gasto'].strftime('%Y-%m-%d')}**")
                     col2.write(f"📌 **{row['categoria']}**: {row['descripcion']}")
                     col3.write(f"💰 **S/ {row['monto']:,.2f}**")
                     if st.button("Ver Comprobante", key=f"btn_g_{row['id']}"):
-                        st.image(row['link_factura'], caption=f"Recibo - {row['descripcion']}", use_container_width=True)
-        else:
-            st.info("No hay gastos registrados todavía.")
+                        st.image(row['link_factura'], use_container_width=True)
+        else: st.info("No hay gastos.")
